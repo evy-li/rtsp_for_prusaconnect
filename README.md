@@ -1,6 +1,8 @@
 # RTSP for PrusaConnect
 Run this script to regularly capture a snapshot and upload to PrusaConnect. If your RTSP camera is unavilable then the script will periodically check for it's availabilty before resuming.
 
+Tested with a Tapo C110 and Raspberry Pi 4 running Raspberry Pi OS (64-bit) Kernel version: 6.1 Debian version: 11 (bullseye).
+
 ### Prerequisites
 - FFmpeg
 
