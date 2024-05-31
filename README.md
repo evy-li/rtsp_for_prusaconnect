@@ -1,12 +1,12 @@
-# RTSP for PrusaConnect
+# 🎥 RTSP for PrusaConnect
 Run this script to regularly capture a snapshot and upload to PrusaConnect. If your RTSP camera is unavilable then the script will periodically check for it's availabilty before resuming.
 
 Tested with a Tapo C110 and Raspberry Pi 4 running Raspberry Pi OS (64-bit) Kernel version: 6.1 Debian version: 11 (bullseye).
 
-### Prerequisites
+### 💁🏻‍♀️ Prerequisites
 - FFmpeg
 
-### Instructions
+### 📖 Instructions
 - Create a new PrusaConnect camera by selecting 'Add new web camera'.
 - Click on the pairing QR code, or open a new browser window/tab and append the generated token to:
 ```
@@ -31,5 +31,5 @@ chmod +x rtsp_for_prusaconnect.sh
 ```
 - To exit, press Ctrl+C – or close the terminal window.
 
-### More info
+### ℹ️ More info
 If your camera supports a higher resolution, the image will be resized to a horizontal resolution of 1920px.
