@@ -1,54 +1,126 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Enable strict mode: exit on error, unset var, or pipeline failure
+set -euo pipefail
+# Set safe IFS to newline and tab to avoid word-splitting surprises
+IFS=$'\n\t'
 
-# Camera
-camera_ip=address
-camera_rtsp_url=rtsp://username:password@address/stream1
+########################################
+# Configuration (customize as needed)  #
+########################################
 
-# Your PrusaConnect info
-token=token
-fingerprint=fingerprint
+# IP or hostname of your camera
+camera_ip="address"
 
-# Delays (in seconds)
-snapshot_delay=10
-ffmpeg_error_delay=60
-unreachable_delay=300
+# RTSP URL for your camera stream (uses camera_ip)
+camera_rtsp_url="rtsp://username:password@${camera_ip}/stream1"
 
-# PrusaConnect URL
-prusaconnect_url=https://webcam.connect.prusa3d.com/c/snapshot
+# PrusaConnect API endpoint for snapshots
+prusaconnect_url="https://webcam.connect.prusa3d.com/c/snapshot"
 
-while true; do
+# Authentication tokens for PrusaConnect
+token="your_token_here"
+fingerprint="your_fingerprint_here"
 
-    IP=$camera_ip
-    COUNT=1
+# Delay settings (in seconds)
+snapshot_delay=10        # wait after a successful upload
+ffmpeg_error_delay=60    # wait after an ffmpeg capture error
+unreachable_delay=300    # wait if camera is offline
 
-    if
-        ping -c $COUNT $IP >/dev/null 2>&1
-    then
-        echo -e "Camera is reachable. Capturing image using FFmpeg... \n"
-        # Capture a frame from the RTSP stream using FFmpeg
-        ffmpeg -loglevel quiet -stats -y -rtsp_transport tcp -i "$camera_rtsp_url" -frames:v 1 -q:v 6 -pix_fmt yuv420p -vf scale="1920:-1" printer_snapshot.jpg
-        echo -e "Done. \n"
+########################################
+# Utility Functions                    #
+########################################
 
-        # If no error then upload it
-        if [ $? -eq 0 ]; then
-            echo -e "Uploading to PrusaConnect... \n"
-            # POST the image to the HTTP URL using curl
-            curl -X PUT "$prusaconnect_url" -H "accept: */*" -H "content-type: image/jpg" -H "fingerprint: $fingerprint" -H "token: $token" --data-binary "@printer_snapshot.jpg" --no-progress-meter --compressed
-            echo -e "Done. \n"
-            # Reset delay to the normal value
-            delay=$snapshot_delay
+# Log with ISO8601 timestamp
+log() {
+  printf '[%s] %s\n' "$(date +'%Y-%m-%dT%H:%M:%S%z')" "$*"
+}
+
+# Clean up temporary files on exit
+cleanup() {
+  rm -f "$tmpfile"
+  log "Cleaned up temporary files. Exiting."
+}
+trap cleanup EXIT
+
+# Check that required commands exist before proceeding
+require_commands() {
+  local cmd
+  for cmd in ping ffmpeg curl; do
+    if ! command -v "$cmd" &>/dev/null; then
+      echo "Error: Required command '$cmd' not found." >&2
+      exit 1
+    fi
+  done
+}
+
+# Capture a single frame from the RTSP stream
+capture_snapshot() {
+  log "Starting ffmpeg snapshot capture..."
+  # ffmpeg: quiet except errors, TCP transport, single frame, quality 6
+  ffmpeg -loglevel error -y \
+    -rtsp_transport tcp \
+    -i "$camera_rtsp_url" \
+    -frames:v 1 \
+    -q:v 6 \
+    -pix_fmt yuv420p \
+    -vf scale=1920:-1 \
+    "$tmpfile"
+}
+
+# Upload the snapshot to PrusaConnect
+upload_snapshot() {
+  log "Uploading snapshot to PrusaConnect..."
+  # curl --fail: returns non-zero on HTTP errors (>=400)
+  curl --fail -X PUT "$prusaconnect_url" \
+    -H "Accept: */*" \
+    -H "Content-Type: image/jpg" \
+    -H "fingerprint: $fingerprint" \
+    -H "token: $token" \
+    --data-binary "@$tmpfile" \
+    --no-progress-meter
+}
+
+########################################
+# Main Loop                            #
+########################################
+
+main_loop() {
+  # Create a temporary file for the snapshot
+  tmpfile="$(mktemp --suffix=.jpg)"
+  log "Temporary snapshot file: $tmpfile"
+
+  # Infinite loop to poll and upload
+  while true; do
+    # Check if camera is reachable
+    if ping -c1 "$camera_ip" &>/dev/null; then
+      log "Camera at $camera_ip is reachable."
+
+      # Attempt to capture a snapshot
+      if capture_snapshot; then
+        log "Snapshot captured successfully."
+        # Attempt to upload
+        if upload_snapshot; then
+          log "Upload succeeded."
+          delay=$snapshot_delay
         else
-            echo -e "FFmpeg returned an error. Retrying after ${ffmpeg_error_delay}s... \n"
-
-            # Set delay to the longer value
-            delay=$ffmpeg_error_delay
+          log "Upload failed; will retry after ${ffmpeg_error_delay}s."
+          delay=$ffmpeg_error_delay
         fi
-        echo -e "Waiting for $delay seconds before taking another snapshot. \n"
-        sleep "$delay"
-
+      else
+        log "ffmpeg failed to capture; will retry after ${ffmpeg_error_delay}s."
+        delay=$ffmpeg_error_delay
+      fi
     else
-        echo -e "Camera is unreachable. Waiting $unreachable_delay seconds before another attempt. \n"
-        sleep "$unreachable_delay"
+      log "Camera unreachable; waiting ${unreachable_delay}s before retry."
+      delay=$unreachable_delay
     fi
 
-done
+    # Wait before next iteration
+    log "Sleeping for ${delay}s..."
+    sleep "$delay"
+  done
+}
+
+# Entrypoint: verify dependencies, then start main loop
+require_commands
+main_loop
