@@ -1,30 +1,20 @@
 #!/usr/bin/env bash
 # Enable strict mode: exit on error, unset var, or pipeline failure
 set -euo pipefail
-# Set safe IFS to newline and tab to avoid word-splitting surprises
+# Set safe IFS to newline and tab to avoid word-splitting
 IFS=$'\n\t'
 
 ########################################
-# Configuration (customize as needed)  #
+# Load configuration from .env file    #
 ########################################
 
-# IP or hostname of your camera
-camera_ip="address"
-
-# RTSP URL for your camera stream (uses camera_ip)
-camera_rtsp_url="rtsp://username:password@${camera_ip}/stream1"
-
-# PrusaConnect API endpoint for snapshots
-prusaconnect_url="https://webcam.connect.prusa3d.com/c/snapshot"
-
-# Authentication tokens for PrusaConnect
-token="your_token_here"
-fingerprint="your_fingerprint_here"
-
-# Delay settings (in seconds)
-snapshot_delay=10        # wait after a successful upload
-ffmpeg_error_delay=60    # wait after an ffmpeg capture error
-unreachable_delay=300    # wait if camera is offline
+ENV_FILE="$(dirname "$0")/.env"
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "Error: .env file not found at $ENV_FILE" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$ENV_FILE"
 
 ########################################
 # Utility Functions                    #
@@ -35,10 +25,16 @@ log() {
   printf '[%s] %s\n' "$(date +'%Y-%m-%dT%H:%M:%S%z')" "$*"
 }
 
+# Create a temporary file for the snapshot (global, so cleanup always works)
+tmpfile="$(mktemp --suffix=.jpg)"
+
 # Clean up temporary files on exit
 cleanup() {
-  rm -f "$tmpfile"
-  log "Cleaned up temporary files. Exiting."
+  # Only remove if tmpfile is set and not empty
+  if [[ -n "${tmpfile:-}" && -f "$tmpfile" ]]; then
+    rm -f "$tmpfile"
+    log "Temporary files removed."
+  fi
 }
 trap cleanup EXIT
 
@@ -55,7 +51,7 @@ require_commands() {
 
 # Capture a single frame from the RTSP stream
 capture_snapshot() {
-  log "Starting ffmpeg snapshot capture..."
+  log "Capturing snapshot from RTSP stream."
   # ffmpeg: quiet except errors, TCP transport, single frame, quality 6
   ffmpeg -loglevel error -y \
     -rtsp_transport tcp \
@@ -69,11 +65,11 @@ capture_snapshot() {
 
 # Upload the snapshot to PrusaConnect
 upload_snapshot() {
-  log "Uploading snapshot to PrusaConnect..."
-  # curl --fail: returns non-zero on HTTP errors (>=400)
+  log "Uploading snapshot to PrusaConnect."
+  # Use correct MIME type for JPEG
   curl --fail -X PUT "$prusaconnect_url" \
     -H "Accept: */*" \
-    -H "Content-Type: image/jpg" \
+    -H "Content-Type: image/jpeg" \
     -H "fingerprint: $fingerprint" \
     -H "token: $token" \
     --data-binary "@$tmpfile" \
@@ -85,8 +81,6 @@ upload_snapshot() {
 ########################################
 
 main_loop() {
-  # Create a temporary file for the snapshot
-  tmpfile="$(mktemp --suffix=.jpg)"
   log "Temporary snapshot file: $tmpfile"
 
   # Infinite loop to poll and upload
@@ -103,12 +97,12 @@ main_loop() {
           log "Upload succeeded."
           delay=$snapshot_delay
         else
-          log "Upload failed; will retry after ${ffmpeg_error_delay}s."
-          delay=$ffmpeg_error_delay
+          log "Upload failed; will retry after ${error_delay}s."
+          delay=$error_delay
         fi
       else
-        log "ffmpeg failed to capture; will retry after ${ffmpeg_error_delay}s."
-        delay=$ffmpeg_error_delay
+        log "ffmpeg failed to capture; will retry after ${error_delay}s."
+        delay=$error_delay
       fi
     else
       log "Camera unreachable; waiting ${unreachable_delay}s before retry."
